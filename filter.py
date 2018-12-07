@@ -7,7 +7,7 @@ from sklearn.metrics import accuracy_score
 from sklearn import tree
 from sklearn import preprocessing
 from sklearn.feature_extraction import DictVectorizer
-from sklearn.model_selection import GridSearchCV
+from sklearn.model_selection import GridSearchCV, train_test_split
 from sklearn.metrics import precision_score, recall_score
 from sklearn.linear_model import LogisticRegression
 from sklearn.ensemble import AdaBoostClassifier, RandomForestClassifier
@@ -195,10 +195,10 @@ def spam_ham_predict(train_file, test_file, giveaways):
 	return
 
 '''
-Run ensemble model where the majority vote is taken from
+Run model where the majority vote is taken from
 all the different types of predictors
 '''
-def ensemble(x_train, y_train, x_test, y_test):
+def majority_vote(x_train, y_train, x_test, y_test):
 	# try a bunch of different stuff from sklearn
 	logreg = LogisticRegression(random_state=0, solver='lbfgs', multi_class='ovr').fit(x_train, y_train)
 	logreg_preds = list(logreg.predict(x_test))
@@ -211,7 +211,6 @@ def ensemble(x_train, y_train, x_test, y_test):
 	rf = RandomForestClassifier(n_estimators=50, max_depth=6, min_samples_split=4, min_samples_leaf=2, max_features=None)
 	rf = rf.fit(x_train, y_train)
 	rf_preds = list(rf.predict(x_test))
-	print(rf_preds)
 
 	# decision tree
 	dt = tree.DecisionTreeClassifier(max_depth=6, min_samples_split=4, min_samples_leaf=2, max_features=None)
@@ -220,7 +219,6 @@ def ensemble(x_train, y_train, x_test, y_test):
 
 	assert(len(logreg_preds) == len(ada_preds) == len(rf_preds) == len(dt_preds))
 	aggregate_pred = [sum(x) for x in zip(logreg_preds, ada_preds, rf_preds, dt_preds)]
-	print(aggregate_pred)
 
 	final_pred = [0]*len(aggregate_pred)
 	for i in range(len(final_pred)):
@@ -228,10 +226,62 @@ def ensemble(x_train, y_train, x_test, y_test):
 			final_pred[i] = 1
 
 	accuracy = accuracy_score(y_test, final_pred)
-	print('ensemble accuracy', accuracy)
+	print('majority vote accuracy', accuracy)
 
-	print(final_pred)
-	print(y_test)
+'''
+Run ensemble model
+DESIGN: 
+- first level: logreg, adaboost, random forest
+- second level: decision tree
+'''
+def ensemble(x_train, y_train, x_test, y_test):
+	# split the training data into its own training and test data
+	prelim_train_data, prelim_test_data = train_test_split(list(zip(x_train, y_train)))
+	prelim_train, prelim_train_label, prelim_test, prelim_test_label = [], [], [], []
+
+	for i in range(len(prelim_train_data)):
+		prelim_train.append(prelim_train_data[i][0])
+		prelim_train_label.append(prelim_train_data[i][1])
+	assert(len(prelim_train) == len(prelim_train_label))
+
+	for i in range(len(prelim_test_data)):
+		prelim_test.append(prelim_test_data[i][0])
+		prelim_test_label.append(prelim_test_data[i][1])
+	assert(len(prelim_test) == len(prelim_test_label))
+
+	# try a bunch of different stuff from sklearn
+	logreg = LogisticRegression(random_state=0, solver='lbfgs', multi_class='ovr').fit(prelim_train, prelim_train_label)
+	logreg_prelim = list(logreg.predict(prelim_test))
+	logreg_y = list(logreg.predict(x_test))
+
+	# adaboost model where the individual units are instantiations of the logreg estimator above
+	adaboost = AdaBoostClassifier(base_estimator=logreg, learning_rate=0.3).fit(prelim_train, prelim_train_label)
+	ada_prelim = list(adaboost.predict(prelim_test))
+	ada_y = list(logreg.predict(x_test))
+
+	# random forest
+	rf = RandomForestClassifier(n_estimators=50, max_depth=6, min_samples_split=4, min_samples_leaf=2, max_features=None)
+	rf = rf.fit(prelim_train, prelim_train_label)
+	rf_prelim = list(rf.predict(prelim_test))
+	rf_y = list(logreg.predict(x_test))
+
+	# use decision tree as the 2nd layer
+	info_for_dt = []
+	for i in range(len(logreg_prelim)):
+		info_for_dt.append([logreg_prelim[i], ada_prelim[i], rf_prelim[i]])
+
+	x_test_dt = []
+	for i in range(len(logreg_y)):
+		x_test_dt.append([logreg_y[i], ada_y[i], rf_y[i]])
+
+	dt = tree.DecisionTreeClassifier(max_depth=6, min_samples_split=4, min_samples_leaf=2, max_features=None)
+	dt = dt.fit(info_for_dt, prelim_test_label)
+	dt_preds = list(dt.predict(x_test_dt))
+
+	assert(len(dt_preds) == len(y_test))
+
+	accuracy = accuracy_score(y_test, dt_preds)
+	print('ensemble accuracy', accuracy)
 
 def main():
 	if len(sys.argv) != 4:
@@ -320,7 +370,35 @@ def main():
 
 	# do an ensemble model
 	traindata, trainlabel, testfeatures, testlabels = get_random_data(data)
+	majority_vote(traindata, trainlabel, testfeatures, testlabels)
 	ensemble(traindata, trainlabel, testfeatures, testlabels)
+
+	# ensemble model with test data
+	train_lines = []
+	with open(TRAIN_TEXT_FILE, 'r', encoding='ISO-8859-1') as tr:
+		for line in tr.readlines():
+			train_lines.append(line.strip())
+	train_data = extracttrain(giveaways, 0, lines=train_lines)
+	np.random.shuffle(train_data)
+
+	# split training data into features and labels
+	train_features, train_labels = [], []
+	for fv in train_data:
+		train_features.append(fv[:-1])
+		train_labels.append(fv[-1])
+
+	# prepare test data
+	test_lines= []
+	with open(TEST_VOICE_FILE, 'r', encoding='ISO-8859-1') as tf:
+		for line in tf.readlines():
+			test_lines.append(line.strip())
+	test_data = extracttrain(giveaways, 1, lines=test_lines)
+	test_features, test_labels = [], []
+	for fv in test_data:
+		test_features.append(fv[:-1])
+		test_labels.append(fv[-1])
+	majority_vote(train_features, train_labels, test_features, test_labels)
+	ensemble(train_features, train_labels, test_features, test_labels)
 
 if __name__ == "__main__":
     """ This is executed when run from the command line """
