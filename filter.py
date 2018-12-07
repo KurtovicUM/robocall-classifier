@@ -9,6 +9,8 @@ from sklearn import preprocessing
 from sklearn.feature_extraction import DictVectorizer
 from sklearn.model_selection import GridSearchCV
 from sklearn.metrics import precision_score, recall_score
+from sklearn.linear_model import LogisticRegression
+from sklearn.ensemble import AdaBoostClassifier, RandomForestClassifier
 
 giveaways = {}
 
@@ -192,6 +194,45 @@ def spam_ham_predict(train_file, test_file, giveaways):
 
 	return
 
+'''
+Run ensemble model where the majority vote is taken from
+all the different types of predictors
+'''
+def ensemble(x_train, y_train, x_test, y_test):
+	# try a bunch of different stuff from sklearn
+	logreg = LogisticRegression(random_state=0, solver='lbfgs', multi_class='ovr').fit(x_train, y_train)
+	logreg_preds = list(logreg.predict(x_test))
+
+	# adaboost model where the individual units are instantiations of the logreg estimator above
+	adaboost = AdaBoostClassifier(base_estimator=logreg, learning_rate=0.3).fit(x_train, y_train)
+	ada_preds = list(adaboost.predict(x_test))
+
+	# random forest
+	rf = RandomForestClassifier(n_estimators=50, max_depth=6, min_samples_split=4, min_samples_leaf=2, max_features=None)
+	rf = rf.fit(x_train, y_train)
+	rf_preds = list(rf.predict(x_test))
+	print(rf_preds)
+
+	# decision tree
+	dt = tree.DecisionTreeClassifier(max_depth=6, min_samples_split=4, min_samples_leaf=2, max_features=None)
+	dt = dt.fit(x_train, y_train)
+	dt_preds = list(dt.predict(x_test))
+
+	assert(len(logreg_preds) == len(ada_preds) == len(rf_preds) == len(dt_preds))
+	aggregate_pred = [sum(x) for x in zip(logreg_preds, ada_preds, rf_preds, dt_preds)]
+	print(aggregate_pred)
+
+	final_pred = [0]*len(aggregate_pred)
+	for i in range(len(final_pred)):
+		if aggregate_pred[i] > 2:
+			final_pred[i] = 1
+
+	accuracy = accuracy_score(y_test, final_pred)
+	print('ensemble accuracy', accuracy)
+
+	print(final_pred)
+	print(y_test)
+
 def main():
 	if len(sys.argv) != 4:
 		print('ERROR: too many or too few arguments. Please re-run.')
@@ -207,7 +248,7 @@ def main():
 	TRAIN_TEXT_FILE = 'text_traindata.csv'
 	TEST_VOICE_FILE = 'full_testdata.csv'
 	spam_ham_predict(TRAIN_TEXT_FILE, TEST_VOICE_FILE, giveaways)
-	exit()
+	#exit()
 
 	robofeat = extracttrain(giveaways,1, filename=robofilename)
 	nonrobofeat = extracttrain(giveaways,0, filename=nonrobofilename)
@@ -257,9 +298,9 @@ def main():
 	print('max default tree accuracy after 100 tries:', max_accuracy)
 	avg_accuracy /= 100
 	print('average default tree accuracy after 100 tries:', avg_accuracy)
-	exit()
+	#exit()
 
-
+	'''
 	# individually tuned, bootstrapped tres
 	num_bootstrap = 5000
 	traindata, trainlabel, testfeatures, testlabels = get_random_data(data)
@@ -275,8 +316,11 @@ def main():
 			num_correct += 1
 	accuracy = num_correct / len(testlabels)
 	print('Majority vote accuracy: ', accuracy)
-	
+	'''
 
+	# do an ensemble model
+	traindata, trainlabel, testfeatures, testlabels = get_random_data(data)
+	ensemble(traindata, trainlabel, testfeatures, testlabels)
 
 if __name__ == "__main__":
     """ This is executed when run from the command line """
